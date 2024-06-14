@@ -5,7 +5,7 @@ import numpy as np
 from common.layers import *
 from common.gradient import numerical_gradient
 from collections import OrderedDict
-from dataset.mnist import load_mnist
+from dataset.fashion_mnist import load_mnist
 import matplotlib.pyplot as plt
 
 class ThreeLayerNet:
