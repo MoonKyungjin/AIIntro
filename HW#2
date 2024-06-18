@@ -4,26 +4,24 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pickle
 from collections import OrderedDict
-from dataset.mnist import load_mnist
 from common.layers import Convolution, Relu, Pooling, Affine, SoftmaxWithLoss, Dropout, BatchNormalization
 from common.trainer import Trainer
 from common.gradient import numerical_gradient
+import urllib.request
+import gzip
 
-# 데이터 읽기
-(x_train, t_train), (x_test, t_test) = load_mnist(flatten=False)
+from common.optimizer import *
 
-# 시간이 오래 걸릴 경우 데이터를 줄인다.
-x_train, t_train = x_train[:5000], t_train[:5000]
-x_test, t_test = x_test[:1000], t_test[:1000]
 
-class ImprovedConvNet:
-    """개선된 합성곱 신경망
+class SimpleConvNet:
+    """
 
     conv - relu - pool - conv - relu - pool - affine - relu - dropout - affine - softmax
     """
 
     def __init__(self, input_dim=(1, 28, 28),
-                 conv_param={'filter_num1': 32, 'filter_size1': 5, 'filter_num2': 64, 'filter_size2': 5, 'pad': 0, 'stride': 1},
+                 conv_param={'filter_num1': 32, 'filter_size1': 5,
+                             'filter_num2': 64, 'filter_size2': 5, 'pad': 0, 'stride': 1},
                  hidden_size=128, output_size=10, weight_init_std=0.01):
         filter_num1 = conv_param['filter_num1']
         filter_size1 = conv_param['filter_size1']
@@ -32,29 +30,39 @@ class ImprovedConvNet:
         filter_pad = conv_param['pad']
         filter_stride = conv_param['stride']
         input_size = input_dim[1]
-        conv_output_size1 = (input_size - filter_size1 + 2 * filter_pad) // filter_stride + 1
+        conv_output_size1 = (input_size - filter_size1 +
+                             2 * filter_pad) // filter_stride + 1
         pool_output_size1 = (conv_output_size1 // 2)
-        conv_output_size2 = (pool_output_size1 - filter_size2 + 2 * filter_pad) // filter_stride + 1
+        conv_output_size2 = (pool_output_size1 - filter_size2 +
+                             2 * filter_pad) // filter_stride + 1
         pool_output_size2 = (conv_output_size2 // 2)
         final_pool_output_size = filter_num2 * pool_output_size2 * pool_output_size2
 
         # 가중치 초기화
         self.params = {}
-        self.params['W1'] = weight_init_std * np.random.randn(filter_num1, input_dim[0], filter_size1, filter_size1)
+        self.params['W1'] = weight_init_std * \
+            np.random.randn(
+                filter_num1, input_dim[0], filter_size1, filter_size1)
         self.params['b1'] = np.zeros(filter_num1)
-        self.params['W2'] = weight_init_std * np.random.randn(filter_num2, filter_num1, filter_size2, filter_size2)
+        self.params['W2'] = weight_init_std * \
+            np.random.randn(filter_num2, filter_num1,
+                            filter_size2, filter_size2)
         self.params['b2'] = np.zeros(filter_num2)
-        self.params['W3'] = weight_init_std * np.random.randn(final_pool_output_size, hidden_size)
+        self.params['W3'] = weight_init_std * \
+            np.random.randn(final_pool_output_size, hidden_size)
         self.params['b3'] = np.zeros(hidden_size)
-        self.params['W4'] = weight_init_std * np.random.randn(hidden_size, output_size)
+        self.params['W4'] = weight_init_std * \
+            np.random.randn(hidden_size, output_size)
         self.params['b4'] = np.zeros(output_size)
 
         # 계층 생성
         self.layers = OrderedDict()
-        self.layers['Conv1'] = Convolution(self.params['W1'], self.params['b1'], filter_stride, filter_pad)
+        self.layers['Conv1'] = Convolution(
+            self.params['W1'], self.params['b1'], filter_stride, filter_pad)
         self.layers['Relu1'] = Relu()
         self.layers['Pool1'] = Pooling(pool_h=2, pool_w=2, stride=2)
-        self.layers['Conv2'] = Convolution(self.params['W2'], self.params['b2'], filter_stride, filter_pad)
+        self.layers['Conv2'] = Convolution(
+            self.params['W2'], self.params['b2'], filter_stride, filter_pad)
         self.layers['Relu2'] = Relu()
         self.layers['Pool2'] = Pooling(pool_h=2, pool_w=2, stride=2)
         self.layers['Affine1'] = Affine(self.params['W3'], self.params['b3'])
@@ -91,8 +99,10 @@ class ImprovedConvNet:
         def loss_w(w): return self.loss(x, t)
         grads = {}
         for idx in (1, 2, 3, 4):
-            grads['W' + str(idx)] = numerical_gradient(loss_w, self.params['W' + str(idx)])
-            grads['b' + str(idx)] = numerical_gradient(loss_w, self.params['b' + str(idx)])
+            grads['W' + str(idx)] = numerical_gradient(loss_w,
+                                                       self.params['W' + str(idx)])
+            grads['b' + str(idx)] = numerical_gradient(loss_w,
+                                                       self.params['b' + str(idx)])
         return grads
 
     def gradient(self, x, t):
@@ -130,33 +140,260 @@ class ImprovedConvNet:
             self.layers[key].W = self.params['W' + str(i+1)]
             self.layers[key].b = self.params['b' + str(i+1)]
 
-# 훈련 설정
-max_epochs = 20
-network = ImprovedConvNet(input_dim=(1, 28, 28),
-                        conv_param={'filter_num1': 32, 'filter_size1': 5, 'filter_num2': 64, 'filter_size2': 5, 'pad': 0, 'stride': 1},
-                        hidden_size=128, output_size=10, weight_init_std=0.01)
+############   Fashion MNIST 데이터셋 다운로드   ############
+url_base = 'http://fashion-mnist.s3-website.eu-central-1.amazonaws.com/'
+key_file = {
+    'train_img': 'train-images-idx3-ubyte.gz',
+    'train_label': 'train-labels-idx1-ubyte.gz',
+    'test_img': 't10k-images-idx3-ubyte.gz',
+    'test_label': 't10k-labels-idx1-ubyte.gz'
+}
 
-trainer = Trainer(network, x_train, t_train, x_test, t_test,
-                  epochs=max_epochs, mini_batch_size=100,
-                  optimizer='Adam', optimizer_param={'lr': 0.001},
+dataset_dir = os.path.join(os.getcwd(), 'fashion_data')
+save_file = dataset_dir + "/mnist.pkl"
+os.makedirs(dataset_dir, exist_ok=True)
+
+train_num = 60000
+test_num = 10000
+img_dim = (1, 28, 28)
+img_size = 784
+
+
+def _download(file_name):
+    file_path = dataset_dir + "/" + file_name
+
+    if os.path.exists(file_path):
+        return
+
+    print("Downloading " + file_name + " ... ")
+    urllib.request.urlretrieve(url_base + file_name, file_path)
+    print("Done")
+
+
+def download_mnist():
+    for v in key_file.values():
+        _download(v)
+
+
+def _load_label(file_name):
+    file_path = dataset_dir + "/" + file_name
+
+    print("Converting " + file_name + " to NumPy Array ...")
+    with gzip.open(file_path, 'rb') as f:
+        labels = np.frombuffer(f.read(), np.uint8, offset=8)
+    print("Done")
+
+    return labels
+
+
+def _load_img(file_name):
+    file_path = dataset_dir + "/" + file_name
+
+    print("Converting " + file_name + " to NumPy Array ...")
+    with gzip.open(file_path, 'rb') as f:
+        data = np.frombuffer(f.read(), np.uint8, offset=16)
+    data = data.reshape(-1, img_size)
+    print("Done")
+
+    return data
+
+
+def _convert_numpy():
+    dataset = {}
+    dataset['train_img'] = _load_img(key_file['train_img'])
+    dataset['train_label'] = _load_label(key_file['train_label'])
+    dataset['test_img'] = _load_img(key_file['test_img'])
+    dataset['test_label'] = _load_label(key_file['test_label'])
+
+    return dataset
+
+
+def init_mnist():
+    download_mnist()
+    dataset = _convert_numpy()
+    print("Creating pickle file ...")
+    with open(save_file, 'wb') as f:
+        pickle.dump(dataset, f, -1)
+    print("Done!")
+
+
+def _change_one_hot_label(X):
+    T = np.zeros((X.size, 10))
+    for idx, row in enumerate(T):
+        row[X[idx]] = 1
+
+    return T
+
+
+def load_mnist(normalize=True, flatten=True, one_hot_label=False):
+    """MNIST 데이터셋 읽기
+
+    Parameters
+    ----------
+    normalize : 이미지의 픽셀 값을 0.0~1.0 사이의 값으로 정규화할지 정한다.
+    one_hot_label : 
+        one_hot_label이 True면、레이블을 원-핫(one-hot) 배열로 돌려준다.
+        one-hot 배열은 예를 들어 [0,0,1,0,0,0,0,0,0,0]처럼 한 원소만 1인 배열이다.
+    flatten : 입력 이미지를 1차원 배열로 만들지를 정한다. 
+
+    Returns
+    -------
+    (훈련 이미지, 훈련 레이블), (시험 이미지, 시험 레이블)
+    """
+    if not os.path.exists(save_file):
+        init_mnist()
+
+    with open(save_file, 'rb') as f:
+        dataset = pickle.load(f)
+
+    if normalize:
+        for key in ('train_img', 'test_img'):
+            dataset[key] = dataset[key].astype(np.float32)
+            dataset[key] /= 255.0
+
+    if one_hot_label:
+        dataset['train_label'] = _change_one_hot_label(dataset['train_label'])
+        dataset['test_label'] = _change_one_hot_label(dataset['test_label'])
+
+    if not flatten:
+        for key in ('train_img', 'test_img'):
+            dataset[key] = dataset[key].reshape(-1, 1, 28, 28)
+
+    return dataset['train_img'], dataset['train_label'], dataset['test_img'], dataset['test_label']
+
+############         Trainer 재정의       ############
+
+
+class Trainer:
+    """신경망 훈련을 대신 해주는 클래스
+    """
+
+    def __init__(self, network, x_train, t_train, x_test, t_test,
+                 epochs=20, mini_batch_size=100,
+                 optimizer='SGD', optimizer_param={'lr': 0.01},
+                 evaluate_sample_num_per_epoch=None, verbose=True):
+        self.network = network
+        self.verbose = verbose
+        self.x_train = x_train
+        self.t_train = t_train
+        self.x_test = x_test
+        self.t_test = t_test
+        self.epochs = epochs
+        self.batch_size = mini_batch_size
+        self.evaluate_sample_num_per_epoch = evaluate_sample_num_per_epoch
+
+        # optimzer
+        optimizer_class_dict = {'sgd': SGD, 'momentum': Momentum, 'nesterov': Nesterov,
+                                'adagrad': AdaGrad, 'rmsprpo': RMSprop, 'adam': Adam}
+        self.optimizer = optimizer_class_dict[optimizer.lower()](
+            **optimizer_param)
+
+        self.train_size = x_train.shape[0]
+        self.iter_per_epoch = max(self.train_size / mini_batch_size, 1)
+        self.max_iter = int(epochs * self.iter_per_epoch)
+        self.current_iter = 0
+        self.current_epoch = 0
+
+        self.train_loss_list = []
+        self.train_acc_list = []
+        self.test_acc_list = []
+
+    def train_step(self):
+        batch_mask = np.random.choice(self.train_size, self.batch_size)
+        x_batch = self.x_train[batch_mask]
+        t_batch = self.t_train[batch_mask]
+
+        grads = self.network.gradient(x_batch, t_batch)
+        self.optimizer.update(self.network.params, grads)
+
+        loss = self.network.loss(x_batch, t_batch)
+        self.train_loss_list.append(loss)
+        if self.verbose:
+            print("train loss:" + str(loss))
+
+        if self.current_iter % self.iter_per_epoch == 0:
+            self.current_epoch += 1
+
+            x_train_sample, t_train_sample = self.x_train, self.t_train
+            x_test_sample, t_test_sample = self.x_test, self.t_test
+            if not self.evaluate_sample_num_per_epoch is None:
+                t = self.evaluate_sample_num_per_epoch
+                x_train_sample, t_train_sample = self.x_train[:t], self.t_train[:t]
+                x_test_sample, t_test_sample = self.x_test[:t], self.t_test[:t]
+
+            train_acc = self.network.accuracy(x_train_sample, t_train_sample)
+            test_acc = self.network.accuracy(x_test_sample, t_test_sample)
+            self.train_acc_list.append(train_acc)
+            self.test_acc_list.append(test_acc)
+
+            if self.verbose:
+                print("=== epoch:" + str(self.current_epoch) + ", train acc:" +
+                      str(train_acc) + ", test acc:" + str(test_acc) + " ===")
+        self.current_iter += 1
+
+    def train(self, save_fig_name='training_results.png'):
+        for i in range(self.max_iter):
+            self.train_step()
+
+        test_acc = self.network.accuracy(self.x_test, self.t_test)
+
+        if self.verbose:
+            print("=============== Final Test Accuracy ===============")
+            print("test acc:" + str(test_acc))
+
+        # 학습 손실 및 정확도 그래프 그리기
+        self._plot(save_fig_name)
+
+    def _plot(self, save_fig_name):
+        epochs = np.arange(1, self.current_epoch + 1)
+        plt.figure(figsize=(12, 5))
+
+        # 학습 손실 그래프
+        plt.subplot(1, 2, 1)
+        plt.plot(np.arange(len(self.train_loss_list)),
+                 self.train_loss_list, label='Train Loss')
+        plt.xlabel('Iteration')
+        plt.ylabel('Loss')
+        plt.title('Training Loss')
+        plt.legend()
+
+        # 학습 정확도 그래프
+        plt.subplot(1, 2, 2)
+        plt.plot(epochs, self.train_acc_list, label='Train Accuracy')
+        plt.plot(epochs, self.test_acc_list, label='Test Accuracy')
+        plt.xlabel('Epoch')
+        plt.ylabel('Accuracy')
+        plt.title('Accuracy')
+        plt.legend()
+
+        plt.tight_layout()
+        plt.show()
+        # plt.savefig(f'{save_fig_name}.png')  # 그래프를 파일로 저장
+        # plt.close()
+
+
+############           모델 학습          ############
+
+# 데이터 불러오기
+x_train, y_train, x_test, y_test = load_mnist(flatten=False)
+
+# 모델 정의
+# network = SimpleConvNet(input_dim=(1, 28, 28),
+#                         conv_param={'filter_num': 30,
+#                                     'filter_size': 5, 'pad': 0, 'stride': 1},
+#                         hidden_size=100, output_size=10, weight_init_std=0.01)
+network = SimpleConvNet()
+
+# 모델 학습 정의
+trainer = Trainer(network, x_train, y_train, x_test, y_test,
+                  epochs=10, mini_batch_size=100,
+                  optimizer='Adam', optimizer_param={'lr': 0.005},
                   evaluate_sample_num_per_epoch=1000)
+
+# 모델 학습
 trainer.train()
 
-# 학습된 파라미터 저장
-network.save_params("fashion_mnist_params.pkl")
+# 학습 결과 저장
+network.save_params("simple_convnet_params.pkl")
+print("Saved Network Parameters!")
 
-# 테스트 정확도 출력
-test_acc = network.accuracy(x_test, t_test)
-print("Test Accuracy: ", test_acc)
-
-# 그래프 그리기
-markers = {'train': 'o', 'test': 's'}
-x = np.arange(len(trainer.train_acc_list))  # x의 길이를 맞춤
-
-plt.plot(x, trainer.train_acc_list, marker='o', label='train', markevery=2)
-plt.plot(x, trainer.test_acc_list, marker='s', label='test', markevery=2)
-plt.xlabel("epochs")
-plt.ylabel("accuracy")
-plt.ylim(0, 1.0)
-plt.legend(loc='lower right')
-plt.show()
